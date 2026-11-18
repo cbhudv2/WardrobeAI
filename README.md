@@ -91,10 +91,11 @@ Environment variables:
 - `VPS_HOST=5.231.61.43`
 - `VPS_USER=deploy`
 
-The workflow runs unit tests, builds one immutable commit-SHA image, pushes it to private GHCR,
-uploads Compose and a mode-600 `.env`, invokes the existing rootless deployment helper, logs out
-of GHCR, and verifies health through SSH on the localhost-only port. The workflow's short-lived `GITHUB_TOKEN` is
-used for both push and the one deployment pull; no long-lived GHCR token is required.
+The deployment workflow builds one immutable commit-SHA image, pushes it to private GHCR, uploads
+Compose and a mode-600 `.env`, invokes the existing rootless deployment helper, and logs out of
+GHCR. It does not run the unit tests or wait for a post-deploy health request. The workflow's
+short-lived `GITHUB_TOKEN` is used for both push and the one deployment pull; no long-lived GHCR
+token is required.
 
 ## One-time VPS bootstrap
 

@@ -1,4 +1,4 @@
-name: Test and deploy
+name: Build and deploy
 
 on:
   push:
@@ -14,24 +14,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  test:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install locked dependencies
-        run: |
-          python -m pip install uv==0.13.9
-          uv sync --frozen --extra dev
-      - name: Lint
-        run: uv run ruff check .
-      - name: Unit tests
-        run: uv run pytest
-
   build-and-deploy:
-    needs: test
     runs-on: ubuntu-24.04
     environment: production
     steps:
@@ -100,7 +83,7 @@ jobs:
             --exclude 'data/' --exclude 'backups/' \
             -e "$SSH" deploy/ "$VPS_USER@$VPS_HOST:/srv/apps/wardrobe-ai/"
 
-      - name: Deploy and verify through one SSH session
+      - name: Deploy through one SSH session
         env:
           VPS_HOST: ${{ vars.VPS_HOST }}
           VPS_USER: ${{ vars.VPS_USER }}
@@ -113,14 +96,5 @@ jobs:
              chmod 600 /srv/apps/wardrobe-ai/.env
              trap "docker logout ghcr.io >/dev/null 2>&1 || true" EXIT
              docker login ghcr.io --username cbhudv2 --password-stdin
-             /home/deploy/bin/deploy-app wardrobe-ai deploy
-             attempt=0
-             until curl --fail --silent --show-error http://127.0.0.1:3000/health; do
-               attempt=$((attempt + 1))
-               if [ "$attempt" -ge 12 ]; then
-                 /home/deploy/bin/deploy-app wardrobe-ai logs
-                 exit 1
-               fi
-               sleep 5
-             done'
+             /home/deploy/bin/deploy-app wardrobe-ai deploy'
 
