@@ -13,6 +13,7 @@ from app.legacy_import import import_legacy
 from app.llm.client import MistralClient
 from app.llm.tools import ToolDispatcher
 from app.logging_config import configure_logging
+from app.services.conversation import ConversationMemory
 from app.services.outfits import OutfitService
 from app.services.scheduler import SchedulerService
 from app.services.shopping import ShoppingService
@@ -57,6 +58,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             resolved.app_timezone,
         )
         shopping = ShoppingService(wardrobe)
+        memory = ConversationMemory(database)
         llm = MistralClient(
             resolved.mistral_api_key.get_secret_value(),
             resolved.mistral_base_url,
@@ -76,6 +78,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             weather,
             shopping,
             resolved.app_timezone,
+            memory,
         )
         telegram = TelegramBotService(
             resolved.telegram_bot_token.get_secret_value(),

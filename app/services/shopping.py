@@ -24,7 +24,8 @@ class ShoppingService:
             "market_data_available": False,
             "rules": [
                 "Do not claim current price, stock, availability, or product specifications.",
-                "Evaluate overlap and fit with the wardrobe, plus at least three outfits.",
-                "Buying nothing is a valid conclusion.",
+                "Treat boredom and visual repetition as genuine wardrobe gaps.",
+                "Reward useful novelty in color, texture, silhouette, or styling direction.",
+                "Be specific and prioritize no more than three recommendations.",
             ],
         }

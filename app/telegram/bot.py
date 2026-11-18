@@ -39,7 +39,7 @@ Try:
 • What have I worn recently?
 • Would this jacket be worth buying?
 
-Commands: /wardrobe, /item <id>, /outfit [today|tomorrow], /history, /cancel"""
+Commands: /wardrobe, /item <id>, /outfit [today|tomorrow], /history, /cancel, /forget"""
 
 
 class TelegramBotService:
@@ -76,6 +76,7 @@ class TelegramBotService:
         self.application.add_handler(CommandHandler("outfit", self.outfit_command))
         self.application.add_handler(CommandHandler("history", self.history_command))
         self.application.add_handler(CommandHandler("cancel", self.cancel_command))
+        self.application.add_handler(CommandHandler("forget", self.forget_command))
         self.application.add_handler(CallbackQueryHandler(self.callback_query))
         self.application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.text_message)
@@ -178,6 +179,14 @@ class TelegramBotService:
         cancelled = self.wardrobe.cancel_latest(user.id, chat.id)
         text = "Cancelled the pending change." if cancelled else "There is no pending change."
         await update.effective_message.reply_text(text)
+
+    async def forget_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._prepare(update):
+            return
+        memory = self.dispatcher.memory
+        if memory:
+            memory.clear(update.effective_user.id, update.effective_chat.id)
+        await update.effective_message.reply_text("Forgot our recent conversation context.")
 
     async def text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._prepare(update):

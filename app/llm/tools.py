@@ -17,6 +17,7 @@ from app.domain.schemas import (
 from app.errors import NotFoundError
 from app.llm.client import MistralClient, ModelToolCall
 from app.llm.prompts import OUTFIT_DECISION_PROMPT, SHOPPING_PROMPT, SYSTEM_PROMPT
+from app.services.conversation import ConversationMemory
 from app.services.outfits import OutfitService
 from app.services.shopping import ShoppingService
 from app.services.wardrobe import WardrobeService
@@ -153,7 +154,8 @@ TOOL_SCHEMAS = [
     ),
     _function(
         "purchase_suggest",
-        "Suggest zero to three wardrobe purchases only after an explicit request.",
+        "Creatively suggest up to three wardrobe additions after an explicit request. Treat the "
+        "user's boredom or desire for a new direction as a real need, not merely functional gaps.",
         {"request": {"type": "string"}},
         ["request"],
     ),
@@ -169,6 +171,7 @@ class ToolDispatcher:
         weather: WeatherService,
         shopping: ShoppingService,
         timezone_name: str,
+        memory: ConversationMemory | None = None,
     ) -> None:
         self.llm = llm
         self.wardrobe = wardrobe
@@ -176,6 +179,7 @@ class ToolDispatcher:
         self.weather = weather
         self.shopping = shopping
         self.timezone_name = timezone_name
+        self.memory = memory
 
     async def handle(
         self,
@@ -201,6 +205,9 @@ class ToolDispatcher:
         except NotFoundError:
             pass
 
+        recent_messages = (
+            self.memory.recent(owner_user_id, chat_id, limit=10) if self.memory else []
+        )
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
@@ -211,13 +218,17 @@ class ToolDispatcher:
                     f"Active wardrobe:\n{inventory_text}"
                 ),
             },
+            *recent_messages,
             {"role": "user", "content": user_text[:4000]},
         ]
         if self.llm.supports_function_calling:
             reply = await self.llm.complete(messages, tools=TOOL_SCHEMAS)
             if not reply.tool_calls:
-                return DispatchResponse(reply.text or "Please rephrase that request.")
-            call = reply.tool_calls[0]
+                response = DispatchResponse(reply.text or "Please rephrase that request.")
+            else:
+                response = await self.execute(
+                    reply.tool_calls[0], owner_user_id, chat_id, local_today
+                )
         else:
             fallback_messages = list(messages)
             fallback_messages[0] = {
@@ -232,9 +243,17 @@ class ToolDispatcher:
                 schema_name="intent_envelope",
             )
             if not envelope.tool_name:
-                return DispatchResponse(envelope.response or "Please rephrase that request.")
-            call = ModelToolCall(envelope.tool_name, envelope.arguments)
-        return await self.execute(call, owner_user_id, chat_id, local_today)
+                response = DispatchResponse(envelope.response or "Please rephrase that request.")
+            else:
+                response = await self.execute(
+                    ModelToolCall(envelope.tool_name, envelope.arguments),
+                    owner_user_id,
+                    chat_id,
+                    local_today,
+                )
+        if self.memory:
+            self.memory.append_exchange(owner_user_id, chat_id, user_text, response.text)
+        return response
 
     async def execute(
         self,
@@ -337,12 +356,17 @@ class ToolDispatcher:
         if call.name in {"purchase_evaluate", "purchase_suggest"}:
             description = arguments.get("description") or arguments.get("request") or ""
             context = self.shopping.context_for_evaluation(owner_user_id, description)
+            recent_messages = (
+                self.memory.recent(owner_user_id, chat_id, limit=8) if self.memory else []
+            )
             reply = await self.llm.complete(
                 [
                     {"role": "system", "content": SYSTEM_PROMPT + "\n" + SHOPPING_PROMPT},
+                    *recent_messages,
                     {"role": "user", "content": json.dumps(context, default=str)},
                 ],
                 max_tokens=1000,
+                temperature=0.75,
             )
             return DispatchResponse(reply.text)
         raise ValueError(f"unsupported tool: {call.name}")

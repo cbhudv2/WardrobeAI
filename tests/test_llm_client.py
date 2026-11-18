@@ -1,5 +1,7 @@
 import json
 
+import httpx
+
 from app.llm.client import MistralClient
 
 
@@ -39,3 +41,29 @@ def test_extract_final_text_drops_thinking_chunks() -> None:
         {"type": "output_text", "text": "Visible"},
     ]
     assert MistralClient.extract_final_text(content) == "Visible"
+
+
+async def test_complete_uses_requested_temperature() -> None:
+    captured: dict = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "Try something fresh."}}]},
+        )
+
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://example.invalid",
+    )
+    client = MistralClient("secret", "https://example.invalid", "test", client=http_client)
+    try:
+        await client.complete(
+            [{"role": "user", "content": "Suggest a purchase"}],
+            temperature=0.75,
+        )
+    finally:
+        await client.close()
+
+    assert captured["temperature"] == 0.75

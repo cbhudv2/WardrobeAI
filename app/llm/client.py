@@ -69,11 +69,14 @@ class MistralClient:
         *,
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int = 1200,
+        temperature: float = 0.2,
     ) -> ModelReply:
+        if not 0 <= temperature <= 1:
+            raise ValueError("temperature must be between 0 and 1")
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
-            "temperature": 0.2,
+            "temperature": temperature,
             "max_tokens": max_tokens,
             "reasoning_effort": self.reasoning_effort,
         }

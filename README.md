@@ -15,7 +15,8 @@ idempotency, and every database write.
 - Weather-aware daily recommendations using owned items only.
 - Hard four-calendar-day top-and-bottom pairing cooldown.
 - “I wore it” records only the single active pending recommendation.
-- Confirmed outfit history and explicit, text-only shopping analysis.
+- Confirmed outfit history and creative, wardrobe-aware shopping analysis.
+- Short rolling conversation memory stored in SQLite; `/forget` clears it on demand.
 - Monday–Friday 07:00 suggestions in `Europe/Podgorica`.
 - Idempotent import of the original 23 wardrobe items and seven history entries.
 - Restart-safe Telegram update and scheduled-send deduplication.
