@@ -1,0 +1,34 @@
+{
+  "wardrobe": {
+    "tops_and_outerwear": [
+      {"id":"top_01","name":"Midnight Forest Green Quarter-Zip","category":"Quarter-Zip","color":"Midnight / Forest Green"},
+      {"id":"top_02","name":"Cream Crewneck","category":"Crewneck","color":"Cream / Off-White"},
+      {"id":"top_03","name":"Olive Green Crewneck","category":"Crewneck","color":"Olive Green"},
+      {"id":"top_04","name":"Stone Hoodie","category":"Hoodie","color":"Light Stone Gray"},
+      {"id":"top_05","name":"Dark Teal / Slate Hoodie (NY Jets)","category":"Hoodie","color":"Dark Teal / Slate"},
+      {"id":"top_06","name":"Charcoal Zip-Up Hoodie","category":"Zip-Up Hoodie","color":"Charcoal Gray"},
+      {"id":"top_09","name":"Sand / Oatmeal Plush Zip Jacket","category":"Plush Zip Jacket","color":"Sand / Oatmeal"},
+      {"id":"top_10","name":"Green Short-Sleeve Polo","category":"Polo Shirt","color":"Green"},
+      {"id":"top_11","name":"Navy Short-Sleeve Polo","category":"Polo Shirt","color":"Navy Blue"},
+      {"id":"top_12","name":"The North Face Lightweight Hardshell Jacket (Quest/Antora)","category":"Lightweight Jacket / Windbreaker","color":"Black"},
+      {"id":"top_14","name":"Basic White T-Shirt with Small Lettering","category":"T-Shirt","color":"White"},
+      {"id":"top_15","name":"Basic Black T-Shirt","category":"T-Shirt","color":"Black"},
+      {"id":"top_16","name":"Beige Waffle Quarter-Zip","category":"Waffle Quarter-Zip","color":"Beige / Oatmeal"},
+      {"id":"top_17","name":"Jack & Jones Puffer Jacket","category":"Puffer Jacket","color":"Black"}
+    ],
+    "bottoms": {"jeans": [
+      {"id":"jeans_01","label":"Jeans #1","wash":"Light Blue Denim"},
+      {"id":"jeans_02","label":"Jeans #2","wash":"Classic Mid-Blue Denim (Slim Taper)"},
+      {"id":"jeans_03","label":"Jeans #3","wash":"Deep Indigo Denim (Slim Taper)"},
+      {"id":"jeans_04","label":"Jeans #4 (Slim Taper)","wash":"Solid Black"},
+      {"id":"jeans_05","label":"Jeans #5 (Carrot Fit)","wash":"Light Washed Grey Denim (Carrot Fit)"}
+    ]},
+    "footwear": [
+      {"id":"shoe_01","model":"Adidas Midcity Low","color":"Off-white with navy and charcoal accents"},
+      {"id":"shoe_02","model":"Puma Court Sneakers","color":"White"},
+      {"id":"shoe_03","model":"Fila Chunky Sneakers","color":"White with navy, gray, and orange accents"},
+      {"id":"shoe_04","model":"Adidas Grand Court 2.0 Black","color":"Black"}
+    ]
+  }
+}
+

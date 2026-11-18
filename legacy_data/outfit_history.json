@@ -1,0 +1,12 @@
+{
+  "history": [
+    {"date":"2026-09-29","top":"top_10","bottom":"jeans_01","shoes":"shoe_01","outerwear":null,"mood":"fresh / light","occasion":"college"},
+    {"date":"2026-09-30","top":"top_14","bottom":"jeans_04","shoes":"shoe_01","outerwear":null,"mood":"clean / minimal","occasion":"college"},
+    {"date":"2026-10-05","top":"top_14","bottom":"jeans_03","shoes":"shoe_01","outerwear":null,"mood":"clean / minimal","occasion":"college"},
+    {"date":"2026-10-06","top":"top_15","bottom":"jeans_04","shoes":"shoe_01","outerwear":null,"mood":"dark / low-key","occasion":"college"},
+    {"date":"2026-10-07","top":"top_11","bottom":"jeans_05","shoes":"shoe_04","outerwear":null,"mood":"confident","occasion":"college"},
+    {"date":"2026-10-08","top":"top_16","bottom":"jeans_01","shoes":"shoe_02","outerwear":"top_12","mood":"fresh / light","occasion":"college"},
+    {"date":"2026-10-09","top":"top_04","bottom":"jeans_03","shoes":"shoe_01","outerwear":"top_12","mood":"relaxed","occasion":"college"}
+  ]
+}
+
