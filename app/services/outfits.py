@@ -70,6 +70,22 @@ class OutfitService:
             if role not in item.roles:
                 raise CooldownError(f"item {item_id} cannot be used as {role.value}")
 
+    def validate_active_items(self, owner_user_id: int, selection: OutfitSelection) -> None:
+        """Ensure a historical outfit references active items owned by the user.
+
+        History records what was actually worn, so wardrobe recommendation roles do not
+        apply here. An item classified as a mid-layer may still have been worn as the top.
+        """
+        item_ids = {
+            selection.top_id,
+            selection.bottom_id,
+            selection.footwear_id,
+        }
+        if selection.outerwear_id:
+            item_ids.add(selection.outerwear_id)
+        for item_id in item_ids:
+            self.wardrobe.get_item(owner_user_id, item_id)
+
     def draft_manual_worn(
         self,
         owner_user_id: int,
@@ -83,7 +99,7 @@ class OutfitService:
     ) -> str:
         if worn_date > local_today:
             raise ConfirmationError("a future outfit cannot be recorded as worn")
-        self.validate_item_roles(owner_user_id, selection)
+        self.validate_active_items(owner_user_id, selection)
         now = datetime.now(UTC)
         token = secrets.token_urlsafe(12)
         payload = {
@@ -146,7 +162,7 @@ class OutfitService:
                 raise ConfirmationError("outfit confirmation has expired")
             payload = json.loads(row["payload_json"])
             selection = OutfitSelection.model_validate(payload["selection"])
-            self.validate_item_roles(owner_user_id, selection)
+            self.validate_active_items(owner_user_id, selection)
             outfit_id = f"worn_{uuid.uuid4().hex}"
             connection.execute(
                 "INSERT INTO worn_outfits("

@@ -130,3 +130,24 @@ def test_manual_outfit_rejects_future_date(outfits: OutfitService) -> None:
             date(2026, 11, 18),
             selection,
         )
+
+
+def test_manual_outfit_records_actual_use_despite_recommendation_role(
+    outfits: OutfitService,
+) -> None:
+    target = date(2026, 11, 18)
+    selection = OutfitSelection(
+        top_id="top_09",
+        bottom_id="jeans_02",
+        footwear_id="shoe_02",
+        outerwear_id="top_17",
+    )
+
+    token = outfits.draft_manual_worn(1, 10, target, target, selection)
+    outfits.confirm_manual_worn(token, 1, 10)
+
+    recorded = outfits.database.connect().execute(
+        "SELECT * FROM worn_outfits ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    assert recorded["top_item_id"] == "top_09"
+    assert recorded["outerwear_item_id"] == "top_17"

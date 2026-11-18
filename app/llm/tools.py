@@ -126,7 +126,8 @@ TOOL_SCHEMAS = [
     ),
     _function(
         "outfit_log_manual",
-        "Draft a confirmed history entry when the user wore a different, explicitly named outfit.",
+        "Draft a history entry for an outfit the user actually wore. Recommendation-role rules "
+        "do not apply to historical facts; put a named mid-layer in top_id when it was the top.",
         {
             "worn_date": {"type": ["string", "null"], "format": "date"},
             "top_id": {"type": "string"},

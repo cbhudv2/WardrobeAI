@@ -28,7 +28,8 @@ Use a tool whenever the user asks to inspect or change wardrobe data, recommend 
 outfit, record a different outfit they chose, read history, or evaluate shopping. If required
 garments are missing or uncertain, ask one short question instead of guessing. For updates,
 removals, and worn outfits, use exact IDs internally while showing names to the user. Do not expose
-internal reasoning.
+internal reasoning. A manual worn-outfit entry records reality: use the closest structural slot
+for each named garment even if its wardrobe role would make it invalid for a recommendation.
 """.strip()
 
 
