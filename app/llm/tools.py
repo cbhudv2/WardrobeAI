@@ -8,7 +8,12 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.domain.enums import ItemCategory, WearRole
-from app.domain.schemas import RecommendationDecision, WardrobeItemDraft, WardrobeItemPatch
+from app.domain.schemas import (
+    OutfitSelection,
+    RecommendationDecision,
+    WardrobeItemDraft,
+    WardrobeItemPatch,
+)
 from app.errors import NotFoundError
 from app.llm.client import MistralClient, ModelToolCall
 from app.llm.prompts import OUTFIT_DECISION_PROMPT, SHOPPING_PROMPT, SYSTEM_PROMPT
@@ -120,9 +125,23 @@ TOOL_SCHEMAS = [
         [],
     ),
     _function(
+        "outfit_log_manual",
+        "Draft a confirmed history entry when the user wore a different, explicitly named outfit.",
+        {
+            "worn_date": {"type": ["string", "null"], "format": "date"},
+            "top_id": {"type": "string"},
+            "bottom_id": {"type": "string"},
+            "footwear_id": {"type": "string"},
+            "outerwear_id": {"type": ["string", "null"]},
+            "mood": {"type": ["string", "null"]},
+            "occasion": {"type": ["string", "null"]},
+        },
+        ["top_id", "bottom_id", "footwear_id"],
+    ),
+    _function(
         "outfit_history",
         "Read recently confirmed worn outfits.",
-        {"limit": {"type": "integer", "minimum": 1, "maximum": 50}},
+        {"limit": {"type": "integer", "minimum": 1, "maximum": 10}},
         [],
     ),
     _function(
@@ -242,14 +261,14 @@ class ToolDispatcher:
             )
             if not items:
                 return DispatchResponse("No matching active wardrobe items.")
-            lines = [f"• {item.name} — {item.color} (`{item.id}`)" for item in items]
-            return DispatchResponse("\n".join(lines))
+            return DispatchResponse(self._format_wardrobe(items))
         if call.name == "wardrobe_get":
             item = self.wardrobe.get_item(owner_user_id, arguments["item_id"])
             roles = ", ".join(sorted(role.value for role in item.roles))
             return DispatchResponse(
-                f"{item.name}\nID: `{item.id}`\nCategory: {item.category.value}\n"
-                f"Color: {item.color}\nRoles: {roles}"
+                f"{self._display_name(item)}\n"
+                f"Category: {item.category.value.replace('_', ' ').title()}\n"
+                f"Use: {roles.replace('_', ' ')}"
             )
         if call.name == "wardrobe_update":
             patch = WardrobeItemPatch.model_validate(arguments["patch"])
@@ -289,10 +308,31 @@ class ToolDispatcher:
                 constraints=arguments["request"],
             )
         if call.name == "outfit_confirm_worn":
-            outfit_id = self.outfits.confirm_worn(owner_user_id, chat_id, local_today)
-            return DispatchResponse(f"Recorded as worn. History entry: `{outfit_id}`.")
+            self.outfits.confirm_worn(owner_user_id, chat_id, local_today)
+            return DispatchResponse("Recorded as worn.")
+        if call.name == "outfit_log_manual":
+            selection = self._selection_from_arguments(arguments)
+            worn_date = (
+                date.fromisoformat(arguments["worn_date"])
+                if arguments.get("worn_date")
+                else local_today
+            )
+            token = self.outfits.draft_manual_worn(
+                owner_user_id,
+                chat_id,
+                worn_date,
+                local_today,
+                selection,
+                mood=arguments.get("mood"),
+                occasion=arguments.get("occasion"),
+            )
+            return DispatchResponse(
+                self._format_manual_draft(owner_user_id, worn_date, selection),
+                confirmation_token=token,
+                confirmation_kind="manual_worn",
+            )
         if call.name == "outfit_history":
-            return self._format_history(owner_user_id, int(arguments.get("limit", 10)))
+            return self._format_history(owner_user_id, int(arguments.get("limit", 5)))
         if call.name in {"purchase_evaluate", "purchase_suggest"}:
             description = arguments.get("description") or arguments.get("request") or ""
             context = self.shopping.context_for_evaluation(owner_user_id, description)
@@ -369,40 +409,111 @@ class ToolDispatcher:
         occasion: str,
     ) -> str:
         selection = decision.selection
-        top = self.wardrobe.get_item(owner_user_id, selection.top_id).name
-        bottom = self.wardrobe.get_item(owner_user_id, selection.bottom_id).name
-        shoes = self.wardrobe.get_item(owner_user_id, selection.footwear_id).name
+        top = self._display_name(self.wardrobe.get_item(owner_user_id, selection.top_id))
+        bottom = self._display_name(self.wardrobe.get_item(owner_user_id, selection.bottom_id))
+        shoes = self._display_name(self.wardrobe.get_item(owner_user_id, selection.footwear_id))
         outerwear = (
-            self.wardrobe.get_item(owner_user_id, selection.outerwear_id).name
+            self._display_name(self.wardrobe.get_item(owner_user_id, selection.outerwear_id))
             if selection.outerwear_id
             else "Not needed"
         )
-        adjustment = (
-            f"\n\nStyling adjustment: {decision.styling_adjustment}"
-            if decision.styling_adjustment
-            else ""
-        )
+        adjustment = f"\nTip: {decision.styling_adjustment}" if decision.styling_adjustment else ""
         return (
-            f"Outfit for {target_date.strftime('%A, %d %B')} — {occasion}\n\n"
-            f"Top: {top}\nJeans: {bottom}\nSneakers: {shoes}\nOuterwear: {outerwear}\n\n"
-            f"Weather: {weather.morning_temperature_c}°C in the morning, "
-            f"{weather.afternoon_temperature_c}°C later; feels like "
-            f"{weather.morning_feels_like_c}°C early; "
-            f"{weather.max_precipitation_probability}% max rain chance, "
-            f"winds up to {weather.max_wind_kph} km/h ({weather.condition}).\n\n"
-            f"Why it works: {decision.reason}{adjustment}\n\n"
-            "Use “I wore it” or the button below only after you actually wear this outfit."
+            f"OUTFIT - {target_date.strftime('%a, %d %b')}\n"
+            f"{occasion.title()}\n\n"
+            f"Top: {top}\n"
+            f"Jeans: {bottom}\n"
+            f"Shoes: {shoes}\n"
+            f"Outerwear: {outerwear}\n\n"
+            f"Weather: {weather.morning_temperature_c} -> "
+            f"{weather.afternoon_temperature_c} C | "
+            f"Rain {weather.max_precipitation_probability}% | {weather.condition}\n"
+            f"Why: {decision.reason}{adjustment}\n\n"
+            "Tap 'I wore it' only if you wear this outfit."
         )
 
     def _format_history(self, owner_user_id: int, limit: int) -> DispatchResponse:
         rows = self.outfits.history(owner_user_id, limit=limit)
         if not rows:
             return DispatchResponse("No confirmed worn outfits yet.")
-        lines = []
+        lines = ["RECENTLY WORN"]
         for row in rows:
             top = self.wardrobe.get_item(owner_user_id, row["top_item_id"], include_deleted=True)
             bottom = self.wardrobe.get_item(
                 owner_user_id, row["bottom_item_id"], include_deleted=True
             )
-            lines.append(f"• {row['worn_date']}: {top.name} + {bottom.name} ({row['occasion']})")
-        return DispatchResponse("Recently worn:\n" + "\n".join(lines))
+            shoes = self.wardrobe.get_item(
+                owner_user_id, row["footwear_item_id"], include_deleted=True
+            )
+            worn_date = date.fromisoformat(row["worn_date"]).strftime("%d %b")
+            lines.extend(
+                [
+                    "",
+                    f"{worn_date} - {self._display_name(top)}",
+                    f"  {self._display_name(bottom)} | {self._display_name(shoes)}",
+                ]
+            )
+        return DispatchResponse("\n".join(lines))
+
+    def _format_wardrobe(self, items: list[Any]) -> str:
+        sections: dict[str, list[Any]] = {
+            "TOPS": [],
+            "OUTERWEAR": [],
+            "JEANS": [],
+            "SHOES": [],
+        }
+        for item in items:
+            if WearRole.BOTTOM in item.roles:
+                section = "JEANS"
+            elif WearRole.FOOTWEAR in item.roles:
+                section = "SHOES"
+            elif WearRole.OUTERWEAR in item.roles:
+                section = "OUTERWEAR"
+            else:
+                section = "TOPS"
+            sections[section].append(item)
+        blocks = []
+        for heading, section_items in sections.items():
+            if section_items:
+                lines = [heading]
+                lines.extend(f"- {self._display_name(item)}" for item in section_items)
+                blocks.append("\n".join(lines))
+        return "\n\n".join(blocks)
+
+    def _format_manual_draft(
+        self,
+        owner_user_id: int,
+        worn_date: date,
+        selection: OutfitSelection,
+    ) -> str:
+        top = self.wardrobe.get_item(owner_user_id, selection.top_id)
+        bottom = self.wardrobe.get_item(owner_user_id, selection.bottom_id)
+        shoes = self.wardrobe.get_item(owner_user_id, selection.footwear_id)
+        outerwear = (
+            self._display_name(self.wardrobe.get_item(owner_user_id, selection.outerwear_id))
+            if selection.outerwear_id
+            else "None"
+        )
+        return (
+            f"RECORD OUTFIT - {worn_date.strftime('%d %b')}\n\n"
+            f"Top: {self._display_name(top)}\n"
+            f"Jeans: {self._display_name(bottom)}\n"
+            f"Shoes: {self._display_name(shoes)}\n"
+            f"Outerwear: {outerwear}\n\n"
+            "Save this as worn?"
+        )
+
+    @staticmethod
+    def _selection_from_arguments(arguments: dict[str, Any]) -> OutfitSelection:
+        return OutfitSelection(
+            top_id=arguments["top_id"],
+            bottom_id=arguments["bottom_id"],
+            footwear_id=arguments["footwear_id"],
+            outerwear_id=arguments.get("outerwear_id"),
+        )
+
+    @staticmethod
+    def _display_name(item: Any) -> str:
+        if item.category == ItemCategory.JEANS:
+            return f"{item.name} - {item.color}"
+        return item.name

@@ -75,8 +75,8 @@ class RecommendationDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     selection: OutfitSelection
-    reason: str = Field(min_length=1, max_length=900)
-    styling_adjustment: str | None = Field(default=None, max_length=300)
+    reason: str = Field(min_length=1, max_length=280)
+    styling_adjustment: str | None = Field(default=None, max_length=160)
 
 
 class WeatherSnapshot(BaseModel):

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import secrets
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from app.database import Database
-from app.domain.enums import RecommendationStatus, WearRole
+from app.domain.enums import PendingActionKind, PendingStatus, RecommendationStatus, WearRole
 from app.domain.schemas import OutfitSelection, RecommendationDecision, WeatherSnapshot
 from app.errors import ConfirmationError, CooldownError, NotFoundError
 from app.services.wardrobe import WardrobeService
@@ -48,6 +49,15 @@ class OutfitService:
         target_date: date,
         selection: OutfitSelection,
     ) -> None:
+        self.validate_item_roles(owner_user_id, selection)
+        if (selection.top_id, selection.bottom_id) in self.forbidden_pairs(
+            owner_user_id, target_date
+        ):
+            raise CooldownError(
+                "top and bottom pairing was worn in the preceding four calendar days"
+            )
+
+    def validate_item_roles(self, owner_user_id: int, selection: OutfitSelection) -> None:
         required = {
             selection.top_id: WearRole.MAIN_TOP,
             selection.bottom_id: WearRole.BOTTOM,
@@ -59,12 +69,120 @@ class OutfitService:
             item = self.wardrobe.get_item(owner_user_id, item_id)
             if role not in item.roles:
                 raise CooldownError(f"item {item_id} cannot be used as {role.value}")
-        if (selection.top_id, selection.bottom_id) in self.forbidden_pairs(
-            owner_user_id, target_date
-        ):
-            raise CooldownError(
-                "top and bottom pairing was worn in the preceding four calendar days"
+
+    def draft_manual_worn(
+        self,
+        owner_user_id: int,
+        chat_id: int,
+        worn_date: date,
+        local_today: date,
+        selection: OutfitSelection,
+        *,
+        mood: str | None = None,
+        occasion: str | None = None,
+    ) -> str:
+        if worn_date > local_today:
+            raise ConfirmationError("a future outfit cannot be recorded as worn")
+        self.validate_item_roles(owner_user_id, selection)
+        now = datetime.now(UTC)
+        token = secrets.token_urlsafe(12)
+        payload = {
+            "worn_date": worn_date.isoformat(),
+            "selection": selection.model_dump(mode="json"),
+            "mood": mood,
+            "occasion": occasion or "casual",
+        }
+        with self.database.transaction() as connection:
+            connection.execute(
+                "UPDATE pending_actions SET status=?, updated_at=? "
+                "WHERE owner_user_id=? AND chat_id=? AND status=?",
+                (
+                    PendingStatus.CANCELLED.value,
+                    now.isoformat(),
+                    owner_user_id,
+                    chat_id,
+                    PendingStatus.PENDING.value,
+                ),
             )
+            connection.execute(
+                "INSERT INTO pending_actions(id, callback_token, owner_user_id, chat_id, kind, "
+                "payload_json, status, created_at, expires_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    f"action_{uuid.uuid4().hex}",
+                    token,
+                    owner_user_id,
+                    chat_id,
+                    PendingActionKind.LOG_MANUAL_OUTFIT.value,
+                    json.dumps(payload, sort_keys=True),
+                    PendingStatus.PENDING.value,
+                    now.isoformat(),
+                    (now + timedelta(minutes=20)).isoformat(),
+                    now.isoformat(),
+                ),
+            )
+        return token
+
+    def confirm_manual_worn(self, token: str, owner_user_id: int, chat_id: int) -> str:
+        now = datetime.now(UTC)
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM pending_actions WHERE callback_token=? AND owner_user_id=? "
+                "AND chat_id=? AND kind=?",
+                (
+                    token,
+                    owner_user_id,
+                    chat_id,
+                    PendingActionKind.LOG_MANUAL_OUTFIT.value,
+                ),
+            ).fetchone()
+            if row is None or row["status"] != PendingStatus.PENDING.value:
+                raise ConfirmationError("outfit confirmation is missing or already used")
+            if datetime.fromisoformat(row["expires_at"]) <= now:
+                connection.execute(
+                    "UPDATE pending_actions SET status=?, updated_at=? WHERE id=?",
+                    (PendingStatus.EXPIRED.value, now.isoformat(), row["id"]),
+                )
+                raise ConfirmationError("outfit confirmation has expired")
+            payload = json.loads(row["payload_json"])
+            selection = OutfitSelection.model_validate(payload["selection"])
+            self.validate_item_roles(owner_user_id, selection)
+            outfit_id = f"worn_{uuid.uuid4().hex}"
+            connection.execute(
+                "INSERT INTO worn_outfits("
+                "id, owner_user_id, worn_date, top_item_id, bottom_item_id, footwear_item_id, "
+                "outerwear_item_id, mood, occasion, confirmed_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    outfit_id,
+                    owner_user_id,
+                    payload["worn_date"],
+                    selection.top_id,
+                    selection.bottom_id,
+                    selection.footwear_id,
+                    selection.outerwear_id,
+                    payload.get("mood"),
+                    payload.get("occasion"),
+                    now.isoformat(),
+                    now.isoformat(),
+                ),
+            )
+            connection.execute(
+                "UPDATE pending_actions SET status=?, updated_at=? WHERE id=?",
+                (PendingStatus.CONFIRMED.value, now.isoformat(), row["id"]),
+            )
+            connection.execute(
+                "UPDATE recommendations SET status=?, updated_at=? "
+                "WHERE owner_user_id=? AND chat_id=? AND status=?",
+                (
+                    RecommendationStatus.DISMISSED.value,
+                    now.isoformat(),
+                    owner_user_id,
+                    chat_id,
+                    RecommendationStatus.PENDING.value,
+                ),
+            )
+        return outfit_id
 
     def save_recommendation(
         self,

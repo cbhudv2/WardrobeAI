@@ -27,6 +27,7 @@ class PendingActionKind(StrEnum):
     UPDATE_ITEM = "update_item"
     REMOVE_ITEM = "remove_item"
     RESTORE_ITEM = "restore_item"
+    LOG_MANUAL_OUTFIT = "log_manual_outfit"
 
 
 class PendingStatus(StrEnum):

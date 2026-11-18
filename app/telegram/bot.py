@@ -33,6 +33,7 @@ Try:
 • What should I wear today?
 • Give me something more sporty.
 • I wore it.
+• I wore the cream crewneck, Jeans #2, and Adidas Midcity Low.
 • What have I worn recently?
 • Would this jacket be worth buying?
 
@@ -165,7 +166,7 @@ class TelegramBotService:
     async def history_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._prepare(update):
             return
-        await self._dispatch_call(update, ModelToolCall("outfit_history", {"limit": 10}))
+        await self._dispatch_call(update, ModelToolCall("outfit_history", {"limit": 5}))
 
     async def cancel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._prepare(update):
@@ -208,13 +209,21 @@ class TelegramBotService:
     async def send_response(self, chat_id: int, response: DispatchResponse) -> int:
         keyboard = None
         if response.confirmation_token:
-            verb = "Remove" if response.confirmation_kind == "remove" else "Confirm"
+            if response.confirmation_kind == "remove":
+                verb = "Remove"
+                callback_prefix = "action:confirm"
+            elif response.confirmation_kind == "manual_worn":
+                verb = "Record outfit"
+                callback_prefix = "manual:confirm"
+            else:
+                verb = "Confirm"
+                callback_prefix = "action:confirm"
             keyboard = InlineKeyboardMarkup(
                 [
                     [
                         InlineKeyboardButton(
                             verb,
-                            callback_data=f"action:confirm:{response.confirmation_token}",
+                            callback_data=f"{callback_prefix}:{response.confirmation_token}",
                         ),
                         InlineKeyboardButton(
                             "Cancel",
@@ -261,6 +270,14 @@ class TelegramBotService:
                         token, update.effective_user.id, update.effective_chat.id
                     )
                     text = "Cancelled."
+            elif data.startswith("manual:confirm:"):
+                token = data.split(":", 2)[2]
+                self.outfits.confirm_manual_worn(
+                    token,
+                    update.effective_user.id,
+                    update.effective_chat.id,
+                )
+                text = "Recorded your outfit as worn."
             elif data.startswith("worn:"):
                 recommendation_id = data.split(":", 1)[1]
                 self.outfits.confirm_worn(
