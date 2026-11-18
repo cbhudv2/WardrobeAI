@@ -5,6 +5,7 @@ from datetime import datetime
 
 from pydantic import ValidationError
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -20,6 +21,7 @@ from app.llm.client import ModelToolCall
 from app.llm.tools import DispatchResponse, ToolDispatcher
 from app.services.outfits import OutfitService
 from app.services.wardrobe import WardrobeService
+from app.telegram.formatting import render_telegram_html
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +246,10 @@ class TelegramBotService:
                 ]
             )
         message = await self.bot.send_message(
-            chat_id=chat_id, text=response.text, reply_markup=keyboard
+            chat_id=chat_id,
+            text=render_telegram_html(response.text),
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
         )
         if response.recommendation_id:
             self.outfits.set_telegram_message_id(response.recommendation_id, message.message_id)

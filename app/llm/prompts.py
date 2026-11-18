@@ -30,6 +30,8 @@ garments are missing or uncertain, ask one short question instead of guessing. F
 removals, and worn outfits, use exact IDs internally while showing names to the user. Do not expose
 internal reasoning. A manual worn-outfit entry records reality: use the closest structural slot
 for each named garment even if its wardrobe role would make it invalid for a recommendation.
+Keep conversational formatting suitable for Telegram: short sections, sparse bold text, simple
+bullets, and no Markdown tables.
 """.strip()
 
 
