@@ -9,7 +9,7 @@ from typing import Any
 from app.database import Database
 from app.domain.enums import PendingActionKind, PendingStatus, RecommendationStatus, WearRole
 from app.domain.schemas import OutfitSelection, RecommendationDecision, WeatherSnapshot
-from app.errors import ConfirmationError, CooldownError, NotFoundError
+from app.errors import ConfirmationError, ConflictError, CooldownError, NotFoundError
 from app.services.wardrobe import WardrobeService
 
 
@@ -212,9 +212,41 @@ class OutfitService:
         mood: str | None = None,
         constraints: dict[str, Any] | None = None,
     ) -> str:
-        self.validate_selection(owner_user_id, target_date, decision.selection)
+        return self.save_recommendations(
+            owner_user_id,
+            chat_id,
+            target_date,
+            [decision],
+            weather,
+            occasion=occasion,
+            mood=mood,
+            constraints=constraints,
+        )[0]
+
+    def save_recommendations(
+        self,
+        owner_user_id: int,
+        chat_id: int,
+        target_date: date,
+        decisions: list[RecommendationDecision],
+        weather: WeatherSnapshot,
+        *,
+        occasion: str = "casual software office",
+        mood: str | None = None,
+        constraints: dict[str, Any] | None = None,
+    ) -> list[str]:
+        if not decisions:
+            raise ValueError("at least one recommendation is required")
+        selections = [decision.selection for decision in decisions]
+        for selection in selections:
+            self.validate_selection(owner_user_id, target_date, selection)
+        selection_keys = {(selection.top_id, selection.bottom_id) for selection in selections}
+        if len(selection_keys) != len(selections):
+            raise ConflictError("outfit options must be different")
+
         now = datetime.now(UTC)
-        recommendation_id = f"rec_{uuid.uuid4().hex}"
+        choice_group_id = f"choices_{uuid.uuid4().hex}"
+        recommendation_ids = [f"rec_{uuid.uuid4().hex}" for _ in decisions]
         with self.database.transaction() as connection:
             connection.execute(
                 "UPDATE recommendations SET status=?, updated_at=? "
@@ -227,49 +259,113 @@ class OutfitService:
                     RecommendationStatus.PENDING.value,
                 ),
             )
-            selection = decision.selection
-            connection.execute(
-                "INSERT INTO recommendations("
-                "id, owner_user_id, chat_id, target_date, top_item_id, bottom_item_id, "
-                "footwear_item_id, outerwear_item_id, weather_json, occasion, mood, "
-                "constraints_json, "
-                "rationale, styling_adjustment, status, created_at, expires_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    recommendation_id,
-                    owner_user_id,
-                    chat_id,
-                    target_date.isoformat(),
-                    selection.top_id,
-                    selection.bottom_id,
-                    selection.footwear_id,
-                    selection.outerwear_id,
-                    weather.model_dump_json(),
-                    occasion,
-                    mood,
-                    json.dumps(constraints or {}, sort_keys=True),
-                    decision.reason,
-                    decision.styling_adjustment,
-                    RecommendationStatus.PENDING.value,
-                    now.isoformat(),
-                    (now + timedelta(days=3)).isoformat(),
-                    now.isoformat(),
-                ),
-            )
-        return recommendation_id
+            for recommendation_id, decision in zip(
+                recommendation_ids, decisions, strict=True
+            ):
+                selection = decision.selection
+                connection.execute(
+                    "INSERT INTO recommendations("
+                    "id, owner_user_id, chat_id, target_date, top_item_id, bottom_item_id, "
+                    "footwear_item_id, outerwear_item_id, weather_json, occasion, mood, "
+                    "constraints_json, rationale, styling_adjustment, status, created_at, "
+                    "expires_at, updated_at, choice_group_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        recommendation_id,
+                        owner_user_id,
+                        chat_id,
+                        target_date.isoformat(),
+                        selection.top_id,
+                        selection.bottom_id,
+                        selection.footwear_id,
+                        selection.outerwear_id,
+                        weather.model_dump_json(),
+                        occasion,
+                        mood,
+                        json.dumps(constraints or {}, sort_keys=True),
+                        decision.reason,
+                        decision.styling_adjustment,
+                        RecommendationStatus.PENDING.value,
+                        now.isoformat(),
+                        (now + timedelta(days=3)).isoformat(),
+                        now.isoformat(),
+                        choice_group_id,
+                    ),
+                )
+        return recommendation_ids
 
-    def get_pending(self, owner_user_id: int, chat_id: int) -> Any:
-        row = (
+    def list_pending(self, owner_user_id: int, chat_id: int) -> list[Any]:
+        return (
             self.database.connect()
             .execute(
-                "SELECT * FROM recommendations WHERE owner_user_id=? AND chat_id=? AND status=?",
+                "SELECT * FROM recommendations WHERE owner_user_id=? AND chat_id=? AND status=? "
+                "ORDER BY created_at DESC, id",
                 (owner_user_id, chat_id, RecommendationStatus.PENDING.value),
             )
-            .fetchone()
+            .fetchall()
         )
-        if row is None:
+
+    def get_pending(self, owner_user_id: int, chat_id: int) -> Any:
+        rows = self.list_pending(owner_user_id, chat_id)
+        if not rows:
             raise NotFoundError("there is no pending outfit recommendation")
-        return row
+        if len(rows) != 1:
+            raise ConfirmationError("choose one of the outfit options first")
+        return rows[0]
+
+    def select_recommendation(
+        self, recommendation_id: str, owner_user_id: int, chat_id: int
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM recommendations WHERE id=? AND owner_user_id=? AND chat_id=?",
+                (recommendation_id, owner_user_id, chat_id),
+            ).fetchone()
+            if row is None or row["status"] != RecommendationStatus.PENDING.value:
+                raise ConfirmationError("outfit option is missing or no longer available")
+            connection.execute(
+                "UPDATE recommendations SET status=?, updated_at=? "
+                "WHERE choice_group_id=? AND id<>? AND status=?",
+                (
+                    RecommendationStatus.DISMISSED.value,
+                    now,
+                    row["choice_group_id"],
+                    recommendation_id,
+                    RecommendationStatus.PENDING.value,
+                ),
+            )
+
+    def dismiss_choice_group(self, choice_group_id: str, owner_user_id: int, chat_id: int) -> int:
+        now = datetime.now(UTC).isoformat()
+        with self.database.transaction() as connection:
+            return connection.execute(
+                "UPDATE recommendations SET status=?, updated_at=? "
+                "WHERE choice_group_id=? AND owner_user_id=? AND chat_id=? AND status=?",
+                (
+                    RecommendationStatus.DISMISSED.value,
+                    now,
+                    choice_group_id,
+                    owner_user_id,
+                    chat_id,
+                    RecommendationStatus.PENDING.value,
+                ),
+            ).rowcount
+
+    def dismiss_pending(self, owner_user_id: int, chat_id: int) -> int:
+        now = datetime.now(UTC).isoformat()
+        with self.database.transaction() as connection:
+            return connection.execute(
+                "UPDATE recommendations SET status=?, updated_at=? "
+                "WHERE owner_user_id=? AND chat_id=? AND status=?",
+                (
+                    RecommendationStatus.DISMISSED.value,
+                    now,
+                    owner_user_id,
+                    chat_id,
+                    RecommendationStatus.PENDING.value,
+                ),
+            ).rowcount
 
     def set_telegram_message_id(self, recommendation_id: str, message_id: int) -> None:
         with self.database.transaction() as connection:
@@ -277,6 +373,16 @@ class OutfitService:
                 "UPDATE recommendations SET telegram_message_id=?, updated_at=? WHERE id=?",
                 (message_id, datetime.now(UTC).isoformat(), recommendation_id),
             )
+
+    def choice_group_id(self, recommendation_id: str, owner_user_id: int, chat_id: int) -> str:
+        row = self.database.connect().execute(
+            "SELECT choice_group_id FROM recommendations "
+            "WHERE id=? AND owner_user_id=? AND chat_id=?",
+            (recommendation_id, owner_user_id, chat_id),
+        ).fetchone()
+        if row is None or not row["choice_group_id"]:
+            raise NotFoundError("outfit choices were not found")
+        return str(row["choice_group_id"])
 
     def confirm_worn(
         self,
@@ -333,6 +439,17 @@ class OutfitService:
             connection.execute(
                 "UPDATE recommendations SET status=?, updated_at=? WHERE id=?",
                 (RecommendationStatus.CONFIRMED.value, now.isoformat(), row["id"]),
+            )
+            connection.execute(
+                "UPDATE recommendations SET status=?, updated_at=? "
+                "WHERE choice_group_id=? AND id<>? AND status=?",
+                (
+                    RecommendationStatus.DISMISSED.value,
+                    now.isoformat(),
+                    row["choice_group_id"],
+                    row["id"],
+                    RecommendationStatus.PENDING.value,
+                ),
             )
         return outfit_id
 

@@ -72,6 +72,89 @@ def test_recommendation_is_logged_only_after_confirmation(outfits: OutfitService
         outfits.confirm_worn(1, 10, target, recommendation_id=recommendation_id)
 
 
+def test_two_options_require_selection_and_only_chosen_option_remains_pending(
+    outfits: OutfitService,
+) -> None:
+    target = date(2026, 11, 18)
+    decisions = [
+        RecommendationDecision(
+            selection=OutfitSelection(
+                top_id="top_02",
+                bottom_id="jeans_03",
+                footwear_id="shoe_01",
+            ),
+            reason="Clean and relaxed.",
+        ),
+        RecommendationDecision(
+            selection=OutfitSelection(
+                top_id="top_03",
+                bottom_id="jeans_02",
+                footwear_id="shoe_02",
+            ),
+            reason="Sportier alternative.",
+        ),
+    ]
+    recommendation_ids = outfits.save_recommendations(
+        1, 10, target, decisions, weather(target)
+    )
+
+    with pytest.raises(ConfirmationError):
+        outfits.confirm_worn(1, 10, target)
+
+    outfits.select_recommendation(recommendation_ids[1], 1, 10)
+    pending = outfits.list_pending(1, 10)
+    assert [row["id"] for row in pending] == [recommendation_ids[1]]
+
+    outfits.confirm_worn(1, 10, target, recommendation_id=recommendation_ids[1])
+    statuses = {
+        row["id"]: row["status"]
+        for row in outfits.database.connect()
+        .execute(
+            "SELECT id, status FROM recommendations WHERE id IN (?, ?)",
+            recommendation_ids,
+        )
+        .fetchall()
+    }
+    assert statuses[recommendation_ids[0]] == "dismissed"
+    assert statuses[recommendation_ids[1]] == "confirmed"
+
+
+def test_dismissing_choice_group_records_nothing(outfits: OutfitService) -> None:
+    target = date(2026, 11, 18)
+    decisions = [
+        RecommendationDecision(
+            selection=OutfitSelection(
+                top_id="top_02",
+                bottom_id="jeans_03",
+                footwear_id="shoe_01",
+            ),
+            reason="First option.",
+        ),
+        RecommendationDecision(
+            selection=OutfitSelection(
+                top_id="top_03",
+                bottom_id="jeans_02",
+                footwear_id="shoe_02",
+            ),
+            reason="Second option.",
+        ),
+    ]
+    recommendation_ids = outfits.save_recommendations(
+        1, 10, target, decisions, weather(target)
+    )
+    group_id = outfits.choice_group_id(recommendation_ids[0], 1, 10)
+    worn_before = outfits.database.connect().execute(
+        "SELECT count(*) FROM worn_outfits"
+    ).fetchone()[0]
+
+    assert outfits.dismiss_choice_group(group_id, 1, 10) == 2
+    assert outfits.list_pending(1, 10) == []
+    assert (
+        outfits.database.connect().execute("SELECT count(*) FROM worn_outfits").fetchone()[0]
+        == worn_before
+    )
+
+
 def test_manual_outfit_requires_confirmation_and_dismisses_recommendation(
     outfits: OutfitService,
 ) -> None:

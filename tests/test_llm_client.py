@@ -61,9 +61,9 @@ async def test_complete_uses_requested_temperature() -> None:
     try:
         await client.complete(
             [{"role": "user", "content": "Suggest a purchase"}],
-            temperature=0.75,
+            temperature=1.0,
         )
     finally:
         await client.close()
 
-    assert captured["temperature"] == 0.75
+    assert captured["temperature"] == 1.0

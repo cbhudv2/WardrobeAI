@@ -14,7 +14,7 @@ from app.domain.schemas import (
     WardrobeItemDraft,
     WardrobeItemPatch,
 )
-from app.errors import NotFoundError
+from app.errors import ModelUnavailable, NotFoundError, WardrobeAIError
 from app.llm.client import MistralClient, ModelToolCall
 from app.llm.prompts import OUTFIT_DECISION_PROMPT, SHOPPING_PROMPT, SYSTEM_PROMPT
 from app.services.conversation import ConversationMemory
@@ -30,6 +30,8 @@ class DispatchResponse:
     confirmation_token: str | None = None
     confirmation_kind: str | None = None
     recommendation_id: str | None = None
+    recommendation_ids: tuple[str, ...] = ()
+    recommendation_group_id: str | None = None
 
 
 class IntentEnvelope(BaseModel):
@@ -104,7 +106,7 @@ TOOL_SCHEMAS = [
     ),
     _function(
         "outfit_recommend",
-        "Recommend an outfit. Omit target_date when the user gave no date.",
+        "Recommend two outfit options. Omit target_date when the user gave no date.",
         {
             "target_date": {"type": ["string", "null"], "format": "date"},
             "mood": {"type": ["string", "null"]},
@@ -194,16 +196,19 @@ class ToolDispatcher:
             f"roles={','.join(sorted(role.value for role in item.roles))}"
             for item in inventory
         )
-        pending_text = "none"
-        try:
-            pending = self.outfits.get_pending(owner_user_id, chat_id)
+        pending_rows = self.outfits.list_pending(owner_user_id, chat_id)
+        if pending_rows:
             pending_text = (
-                f"id={pending['id']}, target_date={pending['target_date']}, "
-                f"top={pending['top_item_id']}, bottom={pending['bottom_item_id']}, "
-                f"shoes={pending['footwear_item_id']}, outerwear={pending['outerwear_item_id']}"
+                f"{len(pending_rows)} option(s): "
+                + "; ".join(
+                    f"id={row['id']}, date={row['target_date']}, top={row['top_item_id']}, "
+                    f"bottom={row['bottom_item_id']}, shoes={row['footwear_item_id']}, "
+                    f"outerwear={row['outerwear_item_id']}"
+                    for row in pending_rows
+                )
             )
-        except NotFoundError:
-            pass
+        else:
+            pending_text = "none"
 
         recent_messages = (
             self.memory.recent(owner_user_id, chat_id, limit=10) if self.memory else []
@@ -318,7 +323,10 @@ class ToolDispatcher:
                 constraints=arguments.get("constraints"),
             )
         if call.name == "outfit_refine":
-            pending = self.outfits.get_pending(owner_user_id, chat_id)
+            pending_options = self.outfits.list_pending(owner_user_id, chat_id)
+            if not pending_options:
+                raise NotFoundError("there is no pending outfit recommendation")
+            pending = pending_options[0]
             return await self.recommend(
                 owner_user_id,
                 chat_id,
@@ -366,7 +374,7 @@ class ToolDispatcher:
                     {"role": "user", "content": json.dumps(context, default=str)},
                 ],
                 max_tokens=1000,
-                temperature=0.75,
+                temperature=1.0,
             )
             return DispatchResponse(reply.text)
         raise ValueError(f"unsupported tool: {call.name}")
@@ -383,41 +391,106 @@ class ToolDispatcher:
     ) -> DispatchResponse:
         weather = await self.weather.fetch(target_date)
         context = self.outfits.recommendation_context(owner_user_id, target_date)
-        decision = await self.llm.complete_structured(
-            [
-                {"role": "system", "content": SYSTEM_PROMPT + "\n" + OUTFIT_DECISION_PROMPT},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "target_date": target_date.isoformat(),
-                            "occasion": occasion,
-                            "mood": mood,
-                            "constraints": constraints,
-                            "weather": weather.model_dump(mode="json"),
-                            **context,
-                        },
-                        default=str,
-                    ),
-                },
-            ],
-            RecommendationDecision,
-            schema_name="outfit_recommendation",
-        )
-        recommendation_id = self.outfits.save_recommendation(
+        decisions: list[RecommendationDecision] = []
+        for option_number in (1, 2):
+            decision = await self._generate_valid_decision(
+                owner_user_id,
+                target_date,
+                weather,
+                context,
+                occasion,
+                mood,
+                constraints,
+                excluded=decisions[0] if decisions else None,
+                option_number=option_number,
+            )
+            decisions.append(decision)
+
+        recommendation_ids = self.outfits.save_recommendations(
             owner_user_id,
             chat_id,
             target_date,
-            decision,
+            decisions,
             weather,
             occasion=occasion,
             mood=mood,
             constraints={"request": constraints} if constraints else {},
         )
-        return DispatchResponse(
-            self._format_recommendation(owner_user_id, target_date, decision, weather, occasion),
-            recommendation_id=recommendation_id,
+        group_id = self.outfits.choice_group_id(
+            recommendation_ids[0], owner_user_id, chat_id
         )
+        return DispatchResponse(
+            self._format_recommendation_choices(
+                owner_user_id, target_date, decisions, weather, occasion
+            ),
+            recommendation_ids=tuple(recommendation_ids),
+            recommendation_group_id=group_id,
+        )
+
+    async def _generate_valid_decision(
+        self,
+        owner_user_id: int,
+        target_date: date,
+        weather: Any,
+        context: dict[str, Any],
+        occasion: str,
+        mood: str | None,
+        constraints: str | None,
+        *,
+        excluded: RecommendationDecision | None,
+        option_number: int,
+    ) -> RecommendationDecision:
+        excluded_pair = None
+        if excluded:
+            excluded_pair = {
+                "top_id": excluded.selection.top_id,
+                "bottom_id": excluded.selection.bottom_id,
+            }
+        for attempt in range(2):
+            decision = await self.llm.complete_structured(
+                [
+                    {
+                        "role": "system",
+                        "content": SYSTEM_PROMPT + "\n" + OUTFIT_DECISION_PROMPT,
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "target_date": target_date.isoformat(),
+                                "occasion": occasion,
+                                "mood": mood,
+                                "constraints": constraints,
+                                "option_number": option_number,
+                                "excluded_top_bottom_pair": excluded_pair,
+                                "option_requirement": (
+                                    "Use a different top-and-bottom pair from option 1."
+                                    if excluded_pair
+                                    else "Create the strongest first option."
+                                ),
+                                "retry": attempt == 1,
+                                "weather": weather.model_dump(mode="json"),
+                                **context,
+                            },
+                            default=str,
+                        ),
+                    },
+                ],
+                RecommendationDecision,
+                schema_name="outfit_recommendation",
+                temperature=1.0,
+            )
+            if excluded_pair and (
+                decision.selection.top_id,
+                decision.selection.bottom_id,
+            ) == (excluded_pair["top_id"], excluded_pair["bottom_id"]):
+                continue
+            try:
+                self.outfits.validate_selection(owner_user_id, target_date, decision.selection)
+            except WardrobeAIError:
+                continue
+            return decision
+        raise ModelUnavailable("the model could not produce two valid distinct outfit options")
 
     @staticmethod
     def _target_date(raw: str | None, local_today: date) -> date:
@@ -456,6 +529,58 @@ class ToolDispatcher:
             f"Why: {decision.reason}{adjustment}\n\n"
             "Tap 'I wore it' only if you wear this outfit."
         )
+
+    def _format_recommendation_choices(
+        self,
+        owner_user_id: int,
+        target_date: date,
+        decisions: list[RecommendationDecision],
+        weather: Any,
+        occasion: str,
+    ) -> str:
+        lines = [
+            f"OUTFIT OPTIONS - {target_date.strftime('%a, %d %b')}",
+            occasion.title(),
+        ]
+        for number, decision in enumerate(decisions, start=1):
+            selection = decision.selection
+            top = self._display_name(self.wardrobe.get_item(owner_user_id, selection.top_id))
+            bottom = self._display_name(
+                self.wardrobe.get_item(owner_user_id, selection.bottom_id)
+            )
+            shoes = self._display_name(
+                self.wardrobe.get_item(owner_user_id, selection.footwear_id)
+            )
+            outerwear = (
+                self._display_name(self.wardrobe.get_item(owner_user_id, selection.outerwear_id))
+                if selection.outerwear_id
+                else "Not needed"
+            )
+            lines.extend(
+                [
+                    "",
+                    f"OPTION {number}",
+                    f"Top: {top}",
+                    f"Jeans: {bottom}",
+                    f"Shoes: {shoes}",
+                    f"Outerwear: {outerwear}",
+                    f"Why: {decision.reason}",
+                ]
+            )
+            if decision.styling_adjustment:
+                lines.append(f"Tip: {decision.styling_adjustment}")
+        lines.extend(
+            [
+                "",
+                f"Weather: {weather.morning_temperature_c} -> "
+                f"{weather.afternoon_temperature_c} C | "
+                f"Rain {weather.max_precipitation_probability}% | {weather.condition}",
+                "",
+                "Choose an option below, or choose your own outfit. "
+                "Nothing is recorded as worn yet.",
+            ]
+        )
+        return "\n".join(lines)
 
     def _format_history(self, owner_user_id: int, limit: int) -> DispatchResponse:
         rows = self.outfits.history(owner_user_id, limit=limit)

@@ -12,9 +12,9 @@ idempotency, and every database write.
 
 - Add, search, inspect, correct, soft-delete, and restore wardrobe items.
 - Confirmation buttons for every wardrobe write and removal.
-- Weather-aware daily recommendations using owned items only.
+- Two weather-aware daily outfit options using owned items only, with explicit choice buttons.
 - Hard four-calendar-day top-and-bottom pairing cooldown.
-- “I wore it” records only the single active pending recommendation.
+- Choosing an option never records it; “I wore it” confirms only the selected outfit.
 - Confirmed outfit history and creative, wardrobe-aware shopping analysis.
 - Short rolling conversation memory stored in SQLite; `/forget` clears it on demand.
 - Monday–Friday 07:00 suggestions in `Europe/Podgorica`.

@@ -45,8 +45,9 @@ Select the single strongest valid outfit from the supplied active items. IDs mus
 exactly. The application has already provided forbidden top-and-bottom pairs; none may be used.
 Changing footwear or outerwear never makes a forbidden pair valid. Use verified weather as a
 constraint, considering morning and afternoon commute exposure and indoor office comfort.
-Do not invent garment properties. Explain the choice in one short sentence and make any styling
-adjustment a short phrase. Return only the requested structured object.
+Do not invent garment properties. This is a candidate for the requested date: never say it was
+already worn. Explain the choice in one short sentence and make any styling adjustment a short
+phrase. Return only the requested structured object.
 """.strip()
 
 

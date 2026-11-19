@@ -89,3 +89,37 @@ def test_recommendation_is_short_and_uses_full_jeans_name(
     assert "Jeans #2 - Classic Mid-Blue Denim (Slim Taper)" in result
     assert "jeans_02" not in result
     assert len(result) < 700
+
+
+def test_two_outfit_options_are_clearly_labeled(
+    wardrobe: WardrobeService,
+    outfits: OutfitService,
+) -> None:
+    target = date(2026, 11, 19)
+    decisions = [
+        RecommendationDecision(
+            selection=OutfitSelection(
+                top_id="top_02",
+                bottom_id="jeans_02",
+                footwear_id="shoe_01",
+            ),
+            reason="A clean option.",
+        ),
+        RecommendationDecision(
+            selection=OutfitSelection(
+                top_id="top_03",
+                bottom_id="jeans_03",
+                footwear_id="shoe_02",
+            ),
+            reason="A sportier option.",
+        ),
+    ]
+
+    result = dispatcher(wardrobe, outfits)._format_recommendation_choices(
+        1, target, decisions, weather(target), "office"
+    )
+
+    assert "OPTION 1" in result
+    assert "OPTION 2" in result
+    assert "Nothing is recorded as worn yet." in result
+    assert "top_" not in result

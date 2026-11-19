@@ -39,7 +39,10 @@ Try:
 • What have I worn recently?
 • Would this jacket be worth buying?
 
-Commands: /wardrobe, /item <id>, /outfit [today|tomorrow], /history, /cancel, /forget"""
+Commands: /wardrobe, /item <id>, /outfit [today|tomorrow], /history, /cancel, /forget
+
+/cancel dismisses unconfirmed changes and outfit choices. It never removes saved wardrobe items
+or worn history."""
 
 
 class TelegramBotService:
@@ -176,8 +179,12 @@ class TelegramBotService:
             return
         user = update.effective_user
         chat = update.effective_chat
-        cancelled = self.wardrobe.cancel_latest(user.id, chat.id)
-        text = "Cancelled the pending change." if cancelled else "There is no pending change."
+        cancelled_change = self.wardrobe.cancel_latest(user.id, chat.id)
+        dismissed_outfits = self.outfits.dismiss_pending(user.id, chat.id)
+        if cancelled_change or dismissed_outfits:
+            text = "Cancelled everything awaiting confirmation or selection. Nothing was saved."
+        else:
+            text = "Nothing is waiting for confirmation or selection."
         await update.effective_message.reply_text(text)
 
     async def forget_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -243,6 +250,30 @@ class TelegramBotService:
                     ]
                 ]
             )
+        elif len(response.recommendation_ids) == 2 and response.recommendation_group_id:
+            first_id, second_id = response.recommendation_ids
+            keyboard = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "Choose option 1",
+                            callback_data=f"choose:{first_id}",
+                        ),
+                        InlineKeyboardButton(
+                            "Choose option 2",
+                            callback_data=f"choose:{second_id}",
+                        ),
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "I'll choose something else",
+                            callback_data=(
+                                f"choose-other:{response.recommendation_group_id}"
+                            ),
+                        )
+                    ],
+                ]
+            )
         elif response.recommendation_id:
             keyboard = InlineKeyboardMarkup(
                 [
@@ -260,6 +291,8 @@ class TelegramBotService:
             parse_mode=ParseMode.HTML,
             reply_markup=keyboard,
         )
+        for recommendation_id in response.recommendation_ids:
+            self.outfits.set_telegram_message_id(recommendation_id, message.message_id)
         if response.recommendation_id:
             self.outfits.set_telegram_message_id(response.recommendation_id, message.message_id)
         return message.message_id
@@ -292,6 +325,43 @@ class TelegramBotService:
                     update.effective_chat.id,
                 )
                 text = "Recorded your outfit as worn."
+            elif data.startswith("choose-other:"):
+                group_id = data.split(":", 1)[1]
+                dismissed = self.outfits.dismiss_choice_group(
+                    group_id,
+                    update.effective_user.id,
+                    update.effective_chat.id,
+                )
+                if not dismissed:
+                    raise ValueError("these outfit choices are no longer available")
+                await query.edit_message_reply_markup(reply_markup=None)
+                await query.message.reply_text(
+                    "Sounds good. Tell me what you actually wore later and I'll record it."
+                )
+                return
+            elif data.startswith("choose:"):
+                recommendation_id = data.split(":", 1)[1]
+                self.outfits.select_recommendation(
+                    recommendation_id,
+                    update.effective_user.id,
+                    update.effective_chat.id,
+                )
+                await query.edit_message_reply_markup(
+                    reply_markup=InlineKeyboardMarkup(
+                        [
+                            [
+                                InlineKeyboardButton(
+                                    "I wore it",
+                                    callback_data=f"worn:{recommendation_id}",
+                                )
+                            ]
+                        ]
+                    )
+                )
+                await query.message.reply_text(
+                    "Option selected. Tap 'I wore it' only after you actually wear it."
+                )
+                return
             elif data.startswith("worn:"):
                 recommendation_id = data.split(":", 1)[1]
                 self.outfits.confirm_worn(

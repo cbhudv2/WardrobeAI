@@ -94,7 +94,10 @@ class MistralClient:
         *,
         schema_name: str,
         max_tokens: int = 1200,
+        temperature: float = 0.1,
     ) -> T:
+        if not 0 <= temperature <= 1:
+            raise ValueError("temperature must be between 0 and 1")
         schema = response_model.model_json_schema()
         request_messages = list(messages)
         last_error: Exception | None = None
@@ -102,7 +105,7 @@ class MistralClient:
             payload: dict[str, Any] = {
                 "model": self.model,
                 "messages": request_messages,
-                "temperature": 0.1,
+                "temperature": temperature,
                 "max_tokens": max_tokens,
                 "reasoning_effort": self.reasoning_effort,
                 "response_format": {
